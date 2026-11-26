@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bind vs Reverse Shell</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --line:#30363d; --txt:#e6edf3;
+    --muted:#8b949e; --accent:#3fb950; --accent2:#58a6ff; --danger:#f85149;
+    --mono:'SF Mono',ui-monospace,Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font-family:var(--sans);
+    display:flex;flex-direction:column;align-items:center;padding:24px 16px;min-height:100vh}
+  h1{font-size:20px;margin:0 0 4px;letter-spacing:.3px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:20px;text-align:center}
+  .toggle{display:flex;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:4px;margin-bottom:28px;gap:4px}
+  .toggle button{background:transparent;border:0;color:var(--muted);font-family:var(--sans);
+    font-size:14px;font-weight:600;padding:9px 22px;border-radius:7px;cursor:pointer;transition:.18s}
+  .toggle button.active{color:#fff}
+  .toggle button.active.bind{background:var(--accent2)}
+  .toggle button.active.rev{background:var(--accent)}
+  .stage{width:100%;max-width:620px;background:var(--panel);border:1px solid var(--line);
+    border-radius:14px;padding:30px 20px 24px;position:relative;overflow:hidden}
+  .row{display:flex;justify-content:space-between;align-items:center;gap:12px;position:relative}
+  .box{width:150px;border:1.5px solid var(--line);border-radius:12px;padding:16px 10px;
+    text-align:center;background:#0d1117;position:relative;z-index:2;transition:.25s}
+  .box .emoji{font-size:30px;line-height:1}
+  .box .name{font-weight:700;font-size:14px;margin-top:6px}
+  .box .role{font-size:11px;color:var(--muted);margin-top:3px;font-family:var(--mono);min-height:14px}
+  .box.listen{border-color:var(--accent);box-shadow:0 0 0 3px rgba(63,185,80,.12)}
+  .box .badge{position:absolute;top:-10px;left:50%;transform:translateX(-50%);
+    background:var(--accent);color:#07140a;font-size:9.5px;font-weight:800;
+    padding:2px 8px;border-radius:20px;white-space:nowrap;letter-spacing:.4px;opacity:0;transition:.25s}
+  .box.listen .badge{opacity:1}
+  .track{flex:1;height:2px;background:var(--line);position:relative;margin:0 -6px}
+  .fw{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+    font-size:20px;z-index:3;filter:grayscale(.2)}
+  .fw .wall{position:absolute;top:-17px;left:50%;transform:translateX(-50%);
+    font-size:9px;color:var(--muted);white-space:nowrap;font-family:var(--mono)}
+  .pkt{position:absolute;top:50%;width:11px;height:11px;border-radius:50%;
+    transform:translate(-50%,-50%);z-index:4;opacity:0}
+  .pkt.bind{background:var(--accent2);box-shadow:0 0 10px var(--accent2)}
+  .pkt.rev{background:var(--accent);box-shadow:0 0 10px var(--accent)}
+  .caption{margin-top:22px;font-family:var(--mono);font-size:12.5px;line-height:1.7;
+    color:var(--muted);border-top:1px solid var(--line);padding-top:16px}
+  .caption b{color:var(--txt);font-weight:600}
+  .arrow{color:var(--accent)}
+  .tag{display:inline-block;font-size:11px;font-family:var(--mono);padding:2px 7px;border-radius:5px;margin-right:6px}
+  .tag.in{background:rgba(88,166,255,.15);color:var(--accent2)}
+  .tag.out{background:rgba(63,185,80,.15);color:var(--accent)}
+  @keyframes flowR{0%{left:0;opacity:0}8%{opacity:1}92%{opacity:1}100%{left:100%;opacity:0}}
+  @keyframes flowL{0%{left:100%;opacity:0}8%{opacity:1}92%{opacity:1}100%{left:0;opacity:0}}
+</style>
+</head>
+<body>
+  <h1>Bind vs Reverse Shell</h1>
+  <div class="sub">Same goal — command execution on the target. The only difference is <b>who connects to whom.</b></div>
+
+  <div class="toggle">
+    <button id="bBind" class="bind active" onclick="setMode('bind')">Bind Shell</button>
+    <button id="bRev" class="rev" onclick="setMode('rev')">Reverse Shell</button>
+  </div>
+
+  <div class="stage">
+    <div class="row">
+      <div class="box" id="attacker">
+        <div class="badge">LISTENING</div>
+        <div class="emoji">🧑‍💻</div>
+        <div class="name">Attacker</div>
+        <div class="role" id="aRole">client</div>
+      </div>
+      <div class="track">
+        <div class="fw"><span class="wall" id="fwLabel">firewall</span>🧱</div>
+        <div class="pkt" id="pkt"></div>
+      </div>
+      <div class="box" id="target">
+        <div class="badge">LISTENING</div>
+        <div class="emoji">🖥️</div>
+        <div class="name">Target</div>
+        <div class="role" id="tRole">server</div>
+      </div>
+    </div>
+    <div class="caption" id="caption"></div>
+  </div>
+
+<script>
+  const data = {
+    bind: {
+      listen:'target', aRole:'client (connects in)', tRole:'server (listens)',
+      pktClass:'bind', anim:'flowR', fw:'inbound ✗ blocked',
+      cap:`<span class="tag in">INBOUND</span> Target runs the listener; attacker connects <b>in</b>.<br>
+      <span class="arrow">→</span> Attacker = client, Target = server.<br>
+      <b>Weakness:</b> edge + host firewalls drop unsolicited inbound — usually needs internal access.`
+    },
+    rev: {
+      listen:'attacker', aRole:'server (listens)', tRole:'client (calls back)',
+      pktClass:'rev', anim:'flowL', fw:'outbound ✓ allowed',
+      cap:`<span class="tag out">OUTBOUND</span> Attack box runs the listener; target calls <b>out</b>.<br>
+      <span class="arrow">→</span> Attacker = server, Target = client.<br>
+      <b>Strength:</b> admins overlook outbound — slips past firewalls (use port 443).`
+    }
+  };
+  let mode='bind';
+  function setMode(m){
+    mode=m;
+    const d=data[m];
+    document.getElementById('bBind').classList.toggle('active',m==='bind');
+    document.getElementById('bRev').classList.toggle('active',m==='rev');
+    document.getElementById('attacker').classList.toggle('listen',d.listen==='attacker');
+    document.getElementById('target').classList.toggle('listen',d.listen==='target');
+    document.getElementById('aRole').textContent=d.aRole;
+    document.getElementById('tRole').textContent=d.tRole;
+    document.getElementById('fwLabel').textContent=d.fw;
+    document.getElementById('caption').innerHTML=d.cap;
+    const pkt=document.getElementById('pkt');
+    pkt.className='pkt '+d.pktClass;
+    pkt.style.animation='none';
+    void pkt.offsetWidth;
+    pkt.style.animation=`${d.anim} 2.2s linear infinite`;
+  }
+  setMode('bind');
+</script>
+</body>
+</html>
